@@ -52,8 +52,10 @@ from .energy_processor import EnergyProcessor
 from .modbus import ModbusClient
 from .models import (
     CoordinatorStatus,
+    GridFeedMode,
     InverterModel,
     NumberWritableDef,
+    RegisterDef,
     encode_register,
 )
 from .telemetry import (
@@ -126,7 +128,6 @@ class EcoflowCoordinator(DataUpdateCoordinator):
         self._modbus_client = ModbusClient(self.host, self.port)
         self._last_checked_data: dict[str, Any] = {}
         self._last_checked_time: datetime | None = None
-
         self.control = ControlManager(
             self._modbus_client,
             registers_by_key=self._registers_by_key,
@@ -350,9 +351,25 @@ class EcoflowCoordinator(DataUpdateCoordinator):
 
     # ── Parameter and setpoint writes ─────────────────────────────────────────
 
+    async def async_set_grid_feed_mode(self, mode: GridFeedMode) -> None:
+        """Set limited/unlimited export mode using only register 40537.
+
+        The feed-in power register is intentionally left untouched. On PowerOcean
+        Three Phase it is readable at 40609 but rejects writes.
+        """
+        register = self._registers_by_key["grid_feed_mode"]
+        await self._async_write_register(register, mode.register_value)
+
     async def async_write_modbus_register(
         self, entity_def: NumberWritableDef, value: int
     ) -> None:
+        """Write a device setting from a number entity."""
+        await self._async_write_register(
+            RegisterDef(entity_def.read_key, entity_def.register, entity_def.data_type),
+            value,
+        )
+
+    async def _async_write_register(self, register: RegisterDef, value: int) -> None:
         """Write a device setting and verify it by reading it back.
 
         Settings apply without Modbus control authority, unlike the control word and
@@ -362,11 +379,11 @@ class EcoflowCoordinator(DataUpdateCoordinator):
             raise HomeAssistantError("Modbus client is not connected")
 
         target_value = int(value)
-        register_address = entity_def.register
-        key = entity_def.read_key
+        register_address = register.address
+        key = register.key
 
         try:
-            words = encode_register(target_value, entity_def.data_type)
+            words = encode_register(target_value, register.data_type)
         except ValueError as err:
             raise HomeAssistantError(str(err)) from err
 
@@ -383,9 +400,7 @@ class EcoflowCoordinator(DataUpdateCoordinator):
                 f"Could not verify write to register {register_address}: {err}"
             ) from err
 
-        readback_value = decode_register(readback_words, entity_def.data_type)
-        # A 32-bit register echoes the words just written and only swaps them into
-        # read order a few seconds later, so either form means the write landed.
+        readback_value = decode_register(readback_words, register.data_type)
         if readback_words != words and (
             readback_value is None or int(readback_value) != target_value
         ):
@@ -402,5 +417,9 @@ class EcoflowCoordinator(DataUpdateCoordinator):
             target_value,
         )
 
-        updated_data = {**(self.data or {}), key: target_value}
-        self.async_set_updated_data(updated_data)
+        published_value = (
+            GridFeedMode.from_register(target_value)
+            if key == "grid_feed_mode"
+            else target_value
+        )
+        self.async_set_updated_data({**(self.data or {}), key: published_value})

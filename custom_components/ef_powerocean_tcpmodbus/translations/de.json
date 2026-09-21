@@ -434,9 +434,6 @@
     "switch": {
       "battery_saver_mode_control": {
         "name": "Batteriesparmodus"
-      },
-      "grid_feed": {
-        "name": "Netzeinspeisung"
       }
     }
   }

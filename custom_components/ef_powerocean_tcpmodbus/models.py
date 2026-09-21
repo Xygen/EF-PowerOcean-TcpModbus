@@ -103,6 +103,25 @@ class GridMode(StrEnum):
     ISLANDED = "islanded"
 
 
+class GridFeedMode(StrEnum):
+    """Whether export is capped by the maximum feed-in power register."""
+
+    LIMITED = "limited"
+    UNLIMITED = "unlimited"
+
+    @property
+    def register_value(self) -> int:
+        """Return the protocol enumeration value."""
+        return 1 if self is GridFeedMode.UNLIMITED else 0
+
+    @classmethod
+    def from_register(cls, value: float | None) -> GridFeedMode | None:
+        """Decode the raw register value."""
+        if value is None:
+            return None
+        return cls.UNLIMITED if int(value) else cls.LIMITED
+
+
 class ControlMode(StrEnum):
     """Control method the device follows.
 

@@ -414,6 +414,13 @@ SENSOR_MAP: list[SensorDef] = [
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
     SensorDef(
+        key="grid_feed_mode",
+        device_class="enum",
+        options=tuple(GridFeedMode),
+        entity_category=EntityCategory.DIAGNOSTIC,
+        icon="mdi:transmission-tower-export",
+    ),
+    SensorDef(
         key="inverter_rated_power",
         unit=UnitOfPower.WATT,
         device_class="power",
@@ -611,6 +618,12 @@ BATTERY_SAVER_SWITCH: Final = SwitchDef(
     icon="mdi:leaf",
 )
 
+GRID_FEED_SWITCH: Final = SwitchDef(
+    key="grid_feed",
+    entity_category=EntityCategory.CONFIG,
+    icon="mdi:transmission-tower-export",
+)
+
 CONTROL_FEATURES: Final[dict[ControlFeature, ControlFeatureDef]] = {
     ControlFeature.AUTOMATIC: ControlFeatureDef(method=ControlMode.DEFAULT),
     ControlFeature.HOLD_BATTERY: ControlFeatureDef(
@@ -650,6 +663,12 @@ BATTERY_MODE_SELECT: Final = ControlEntityDef(
     key="battery_mode",
     icon="mdi:home-battery",
     availability=requires_modbus_control,
+)
+
+GRID_FEED_MODE_SELECT: Final = ControlEntityDef(
+    key="grid_feed_mode_control",
+    entity_category=EntityCategory.CONFIG,
+    icon="mdi:transmission-tower-export",
 )
 
 CHARGE_LIMIT_SOC_NUMBER: Final = ControlEntityDef(

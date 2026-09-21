@@ -10,10 +10,10 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import BATTERY_SAVER_SWITCH, DOMAIN, GRID_FEED_SWITCH
+from .const import BATTERY_SAVER_SWITCH, DOMAIN
 from .coordinator import EcoflowCoordinator
 from .entity import EcoFlowBaseEntity
-from .models import GridFeedMode, SwitchDef
+from .models import SwitchDef
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -27,10 +27,7 @@ async def async_setup_entry(
     coordinator: EcoflowCoordinator = hass.data[DOMAIN][entry.entry_id]
 
     async_add_entities(
-        [
-            EcoFlowBatterySaverSwitch(coordinator, entry, BATTERY_SAVER_SWITCH),
-            EcoFlowGridFeedSwitch(coordinator, entry, GRID_FEED_SWITCH),
-        ]
+        [EcoFlowBatterySaverSwitch(coordinator, entry, BATTERY_SAVER_SWITCH)]
     )
 
 
@@ -77,31 +74,3 @@ class EcoFlowBatterySaverSwitch(EcoFlowSwitch):
     async def async_turn_off(self, **kwargs: Any) -> None:
         await self.coordinator.control.async_set_battery_saver(False)
 
-
-class EcoFlowGridFeedSwitch(EcoFlowSwitch):
-    """Whether the inverter may export to the grid."""
-
-    @property
-    def available(self) -> bool:
-        return super().available and self.coordinator.grid_feed_switchable
-
-    @property
-    def is_on(self) -> bool:
-        data = self.coordinator.data or {}
-        if data.get("grid_feed_mode") == GridFeedMode.UNLIMITED:
-            return True
-        return (data.get("feed_in_power_max") or 0) > 0
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        restore = self.coordinator.grid_feed_restore or {}
-        return {
-            "restores_feed_mode": GridFeedMode.from_register(restore.get("mode")),
-            "restores_feed_in_power_max": restore.get("power"),
-        }
-
-    async def async_turn_on(self, **kwargs: Any) -> None:
-        await self.coordinator.async_set_grid_feed(True)
-
-    async def async_turn_off(self, **kwargs: Any) -> None:
-        await self.coordinator.async_set_grid_feed(False)

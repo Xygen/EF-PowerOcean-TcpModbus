@@ -52,8 +52,10 @@ from .energy_processor import EnergyProcessor
 from .modbus import ModbusClient
 from .models import (
     CoordinatorStatus,
+    GridFeedMode,
     InverterModel,
     NumberWritableDef,
+    RegisterDef,
     encode_register,
 )
 from .telemetry import (
@@ -126,6 +128,9 @@ class EcoflowCoordinator(DataUpdateCoordinator):
         self._modbus_client = ModbusClient(self.host, self.port)
         self._last_checked_data: dict[str, Any] = {}
         self._last_checked_time: datetime | None = None
+        # Last non-zero export configuration reported by the inverter, used by the
+        # grid-feed switch to restore exactly what was configured before it was off.
+        self._grid_feed_restore: dict[str, int] | None = None
 
         self.control = ControlManager(
             self._modbus_client,
@@ -161,6 +166,17 @@ class EcoflowCoordinator(DataUpdateCoordinator):
     def get_pymodbus_version(self) -> str:
         return pyModbusVersion
 
+    @property
+    def grid_feed_restore(self) -> dict[str, int] | None:
+        """Return the settings to restore, or None until a non-zero export was seen."""
+        return self._grid_feed_restore
+
+    @property
+    def grid_feed_switchable(self) -> bool:
+        """Return whether disabling grid feed can safely be undone."""
+        original = self._grid_feed_restore
+        return original is not None and original["power"] > 0
+
     # ── Persistence ───────────────────────────────────────────────────────────
 
     def _persisted_state(self) -> dict[str, Any]:
@@ -170,6 +186,7 @@ class EcoflowCoordinator(DataUpdateCoordinator):
             "last_checked_time": self._last_checked_time.isoformat()
             if self._last_checked_time is not None
             else None,
+            "grid_feed_restore": self._grid_feed_restore,
             **self.control.dump_state(),
             **self._energy_processor.dump_state(),
         }
@@ -181,6 +198,7 @@ class EcoflowCoordinator(DataUpdateCoordinator):
 
         self._last_checked_data = stored.get("last_checked_data") or {}
         self._last_checked_time = parse_datetime(stored.get("last_checked_time"))
+        self._grid_feed_restore = stored.get("grid_feed_restore") or None
         self.control.load_state(stored)
         self._energy_processor.load_state(stored)
 
@@ -315,6 +333,8 @@ class EcoflowCoordinator(DataUpdateCoordinator):
                 "Read failed; entities stay unavailable until the next successful read."
             )
 
+        self._track_grid_feed_restore(raw_data)
+
         try:
             result = self._energy_processor.validate_totals(
                 raw_data, self._last_checked_data, self._last_checked_time
@@ -350,9 +370,79 @@ class EcoflowCoordinator(DataUpdateCoordinator):
 
     # ── Parameter and setpoint writes ─────────────────────────────────────────
 
+    def _track_grid_feed_restore(self, raw_data: dict[str, Any]) -> None:
+        """Remember the latest non-zero export configuration reported by the device."""
+        mode = raw_data.get("grid_feed_mode")
+        power = raw_data.get("feed_in_power_max")
+        if mode is None or power is None or int(power) <= 0:
+            return
+
+        updated = {"mode": int(mode), "power": int(power)}
+        if updated != self._grid_feed_restore:
+            _LOGGER.debug("Grid feed settings to restore are now %s", updated)
+        self._grid_feed_restore = updated
+
+    async def async_set_grid_feed(self, allow: bool) -> None:
+        """Disable export or restore the inverter's last non-zero export settings."""
+        restore = self._grid_feed_restore
+        if not self.grid_feed_switchable or restore is None:
+            raise HomeAssistantError(
+                "The grid feed cannot be switched because no restorable non-zero "
+                "export configuration has been reported by the inverter."
+            )
+
+        mode = self._registers_by_key["grid_feed_mode"]
+        power = self._registers_by_key["feed_in_power_max"]
+        mode_value = restore["mode"] if allow else GridFeedMode.LIMITED.register_value
+
+        if allow:
+            # Restore the cap first so switching back to limited can never find 0 W.
+            await self._async_write_register(power, restore["power"])
+            await self._async_write_register(mode, mode_value)
+        else:
+            # Enter limited mode first; a zero cap has no effect while unlimited.
+            await self._async_write_register(mode, mode_value)
+            await self._async_write_register(power, 0)
+
+        self.async_set_updated_data(
+            {
+                **(self.data or {}),
+                "grid_feed_mode": GridFeedMode.from_register(mode_value),
+            }
+        )
+
+    async def async_set_grid_feed_mode(self, mode: GridFeedMode) -> None:
+        """Set limited/unlimited export mode without changing the configured power cap."""
+        data = self.data or {}
+        if int(data.get("feed_in_power_max") or 0) <= 0:
+            raise HomeAssistantError(
+                "Grid feed mode cannot be changed while grid feed is disabled."
+            )
+
+        register = self._registers_by_key["grid_feed_mode"]
+        await self._async_write_register(register, mode.register_value)
+
+        # Keep the switch restore state consistent with a deliberate mode change.
+        if self._grid_feed_restore is not None:
+            self._grid_feed_restore["mode"] = mode.register_value
+
+        self.async_set_updated_data(
+            {
+                **(self.data or {}),
+                "grid_feed_mode": mode,
+            }
+        )
+
     async def async_write_modbus_register(
         self, entity_def: NumberWritableDef, value: int
     ) -> None:
+        """Write a device setting from a number entity."""
+        await self._async_write_register(
+            RegisterDef(entity_def.read_key, entity_def.register, entity_def.data_type),
+            value,
+        )
+
+    async def _async_write_register(self, register: RegisterDef, value: int) -> None:
         """Write a device setting and verify it by reading it back.
 
         Settings apply without Modbus control authority, unlike the control word and
@@ -362,11 +452,11 @@ class EcoflowCoordinator(DataUpdateCoordinator):
             raise HomeAssistantError("Modbus client is not connected")
 
         target_value = int(value)
-        register_address = entity_def.register
-        key = entity_def.read_key
+        register_address = register.address
+        key = register.key
 
         try:
-            words = encode_register(target_value, entity_def.data_type)
+            words = encode_register(target_value, register.data_type)
         except ValueError as err:
             raise HomeAssistantError(str(err)) from err
 
@@ -383,9 +473,7 @@ class EcoflowCoordinator(DataUpdateCoordinator):
                 f"Could not verify write to register {register_address}: {err}"
             ) from err
 
-        readback_value = decode_register(readback_words, entity_def.data_type)
-        # A 32-bit register echoes the words just written and only swaps them into
-        # read order a few seconds later, so either form means the write landed.
+        readback_value = decode_register(readback_words, register.data_type)
         if readback_words != words and (
             readback_value is None or int(readback_value) != target_value
         ):
@@ -402,5 +490,4 @@ class EcoflowCoordinator(DataUpdateCoordinator):
             target_value,
         )
 
-        updated_data = {**(self.data or {}), key: target_value}
-        self.async_set_updated_data(updated_data)
+        self.async_set_updated_data({**(self.data or {}), key: target_value})

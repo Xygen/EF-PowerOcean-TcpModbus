@@ -21,6 +21,7 @@ def coordinator():
     )
     instance._last_checked_data = {}
     instance._last_checked_time = None
+    instance._grid_feed_restore = None
     instance.data = None
     instance._modbus_client = SimpleNamespace(
         connected=True,
@@ -187,6 +188,85 @@ def test_control_state_is_persisted_with_the_coordinators(coordinator) -> None:
     asyncio.run(coordinator.async_load_persisted_state())
 
     assert coordinator.control.battery_saver_commanded is True
+
+
+def test_grid_feed_restore_ignores_zero_cap_and_round_trips(coordinator) -> None:
+    coordinator._track_grid_feed_restore(
+        {"grid_feed_mode": 1.0, "feed_in_power_max": 7560.0}
+    )
+    coordinator._track_grid_feed_restore(
+        {"grid_feed_mode": 0.0, "feed_in_power_max": 0.0}
+    )
+
+    assert coordinator.grid_feed_restore == {"mode": 1, "power": 7560}
+
+    stored = coordinator._persisted_state()
+    coordinator._grid_feed_restore = None
+    coordinator._store = SimpleNamespace(async_load=AsyncMock(return_value=stored))
+    asyncio.run(coordinator.async_load_persisted_state())
+
+    assert coordinator.grid_feed_restore == {"mode": 1, "power": 7560}
+
+
+@pytest.mark.parametrize(
+    ("allow", "expected"),
+    (
+        (False, [("grid_feed_mode", 0), ("feed_in_power_max", 0)]),
+        (True, [("feed_in_power_max", 7560), ("grid_feed_mode", 1)]),
+    ),
+)
+def test_grid_feed_switch_uses_safe_write_order(
+    coordinator, allow: bool, expected: list[tuple[str, int]]
+) -> None:
+    coordinator._grid_feed_restore = {"mode": 1, "power": 7560}
+    writes: list[tuple[str, int]] = []
+    coordinator._async_write_register = AsyncMock(
+        side_effect=lambda register, value: writes.append((register.key, value))
+    )
+    coordinator.async_set_updated_data = Mock()
+
+    asyncio.run(coordinator.async_set_grid_feed(allow))
+
+    assert writes == expected
+
+
+def test_grid_feed_mode_write_keeps_power_cap_and_restore_state(coordinator) -> None:
+    coordinator.data = {
+        "grid_feed_mode": models.GridFeedMode.LIMITED,
+        "feed_in_power_max": 7560.0,
+    }
+    coordinator._grid_feed_restore = {"mode": 0, "power": 7560}
+    coordinator._async_write_register = AsyncMock()
+    coordinator.async_set_updated_data = Mock()
+
+    asyncio.run(
+        coordinator.async_set_grid_feed_mode(models.GridFeedMode.UNLIMITED)
+    )
+
+    register = coordinator._registers_by_key["grid_feed_mode"]
+    coordinator._async_write_register.assert_awaited_once_with(register, 1)
+    assert coordinator.grid_feed_restore == {"mode": 1, "power": 7560}
+    published = coordinator.async_set_updated_data.call_args[0][0]
+    assert published["grid_feed_mode"] == models.GridFeedMode.UNLIMITED
+    assert published["feed_in_power_max"] == 7560.0
+
+
+def test_grid_feed_mode_cannot_bypass_zero_export(coordinator) -> None:
+    coordinator.data = {
+        "grid_feed_mode": models.GridFeedMode.LIMITED,
+        "feed_in_power_max": 0.0,
+    }
+    coordinator._async_write_register = AsyncMock()
+
+    with pytest.raises(
+        coordinator_module.HomeAssistantError,
+        match="while grid feed is disabled",
+    ):
+        asyncio.run(
+            coordinator.async_set_grid_feed_mode(models.GridFeedMode.UNLIMITED)
+        )
+
+    coordinator._async_write_register.assert_not_awaited()
 
 
 def test_accepted_update_publishes_successful_coordinator_status(
@@ -850,15 +930,30 @@ def test_read_plan_is_not_split_more_than_necessary(
     """Neighbouring blocks must be unmergeable, so no poll wastes a round trip."""
     blocks = const.register_blocks_for(inverter_model)
     for block, following in zip(blocks, blocks[1:]):
-        gap = following.start - (block.start + block.count)
+        end = block.start + block.count
+        gap = following.start - end
         merged = following.start + following.count - block.start
 
         assert (
-            gap > models.MAX_REGISTER_GAP or merged > models.MAX_REGISTERS_PER_READ
+            gap > models.MAX_REGISTER_GAP
+            or merged > models.MAX_REGISTERS_PER_READ
+            or end <= const.HEARTBEAT_REGISTER < following.start
         ), (
             f"blocks at {block.start} and {following.start} are only {gap} words "
             f"apart and would merge into {merged} words, so they should be one read"
         )
+
+
+@pytest.mark.parametrize("inverter_model", models.InverterModel)
+def test_the_heartbeat_register_is_never_read_by_a_poll(
+    inverter_model: models.InverterModel,
+) -> None:
+    """Every model but the Plus maps feed_in_power_max one register past it, and the
+    inverter answers a write to a register it is serving a read for with "busy"."""
+    for block in const.register_blocks_for(inverter_model):
+        assert not (
+            block.start <= const.HEARTBEAT_REGISTER < block.start + block.count
+        ), f"the block at {block.start} reads {const.HEARTBEAT_REGISTER}"
 
 
 def test_block_rejects_more_registers_than_a_modbus_read_allows() -> None:

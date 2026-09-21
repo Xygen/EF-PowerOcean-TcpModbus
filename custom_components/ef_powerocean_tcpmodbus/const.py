@@ -620,12 +620,6 @@ BATTERY_SAVER_SWITCH: Final = SwitchDef(
     icon="mdi:leaf",
 )
 
-GRID_FEED_SWITCH: Final = SwitchDef(
-    key="grid_feed",
-    entity_category=EntityCategory.CONFIG,
-    icon="mdi:transmission-tower-export",
-)
-
 CONTROL_FEATURES: Final[dict[ControlFeature, ControlFeatureDef]] = {
     ControlFeature.AUTOMATIC: ControlFeatureDef(method=ControlMode.DEFAULT),
     ControlFeature.HOLD_BATTERY: ControlFeatureDef(

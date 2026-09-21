@@ -73,3 +73,4 @@ class EcoFlowBatterySaverSwitch(EcoFlowSwitch):
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         await self.coordinator.control.async_set_battery_saver(False)
+

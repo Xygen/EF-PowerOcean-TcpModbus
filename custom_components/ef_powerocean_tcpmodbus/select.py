@@ -82,15 +82,6 @@ class EcoFlowGridFeedModeSelect(EcoFlowBaseEntity, SelectEntity):
             self._attr_icon = definition.icon
 
     @property
-    def available(self) -> bool:
-        data = self.coordinator.data or {}
-        return (
-            super().available
-            and self.coordinator.grid_feed_switchable
-            and (data.get("feed_in_power_max") or 0) > 0
-        )
-
-    @property
     def current_option(self) -> str | None:
         mode = (self.coordinator.data or {}).get("grid_feed_mode")
         return str(mode) if mode is not None else None

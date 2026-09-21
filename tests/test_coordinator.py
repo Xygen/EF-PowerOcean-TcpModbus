@@ -21,7 +21,6 @@ def coordinator():
     )
     instance._last_checked_data = {}
     instance._last_checked_time = None
-    instance._grid_feed_restore = None
     instance.data = None
     instance._modbus_client = SimpleNamespace(
         connected=True,
@@ -190,52 +189,11 @@ def test_control_state_is_persisted_with_the_coordinators(coordinator) -> None:
     assert coordinator.control.battery_saver_commanded is True
 
 
-def test_grid_feed_restore_ignores_zero_cap_and_round_trips(coordinator) -> None:
-    coordinator._track_grid_feed_restore(
-        {"grid_feed_mode": 1.0, "feed_in_power_max": 7560.0}
-    )
-    coordinator._track_grid_feed_restore(
-        {"grid_feed_mode": 0.0, "feed_in_power_max": 0.0}
-    )
-
-    assert coordinator.grid_feed_restore == {"mode": 1, "power": 7560}
-
-    stored = coordinator._persisted_state()
-    coordinator._grid_feed_restore = None
-    coordinator._store = SimpleNamespace(async_load=AsyncMock(return_value=stored))
-    asyncio.run(coordinator.async_load_persisted_state())
-
-    assert coordinator.grid_feed_restore == {"mode": 1, "power": 7560}
-
-
-@pytest.mark.parametrize(
-    ("allow", "expected"),
-    (
-        (False, [("grid_feed_mode", 0), ("feed_in_power_max", 0)]),
-        (True, [("feed_in_power_max", 7560), ("grid_feed_mode", 1)]),
-    ),
-)
-def test_grid_feed_switch_uses_safe_write_order(
-    coordinator, allow: bool, expected: list[tuple[str, int]]
-) -> None:
-    coordinator._grid_feed_restore = {"mode": 1, "power": 7560}
-    writes: list[tuple[str, int]] = []
-    coordinator._async_write_register = AsyncMock(
-        side_effect=lambda register, value: writes.append((register.key, value))
-    )
-    coordinator.async_set_updated_data = Mock()
-
-    asyncio.run(coordinator.async_set_grid_feed(allow))
-
-    assert writes == expected
-
-
-def test_grid_feed_mode_write_keeps_power_cap_and_restore_state(coordinator) -> None:
+def test_grid_feed_mode_write_only_touches_mode_register(coordinator) -> None:
     coordinator.data = {
         "grid_feed_mode": models.GridFeedMode.LIMITED,
         "feed_in_power_max": 7560.0,
     }
-    coordinator._grid_feed_restore = {"mode": 0, "power": 7560}
     coordinator._async_write_register = AsyncMock()
     coordinator.async_set_updated_data = Mock()
 
@@ -244,29 +202,36 @@ def test_grid_feed_mode_write_keeps_power_cap_and_restore_state(coordinator) -> 
     )
 
     register = coordinator._registers_by_key["grid_feed_mode"]
+    assert register.address == 40537
     coordinator._async_write_register.assert_awaited_once_with(register, 1)
-    assert coordinator.grid_feed_restore == {"mode": 1, "power": 7560}
-    published = coordinator.async_set_updated_data.call_args[0][0]
-    assert published["grid_feed_mode"] == models.GridFeedMode.UNLIMITED
-    assert published["feed_in_power_max"] == 7560.0
 
 
-def test_grid_feed_mode_cannot_bypass_zero_export(coordinator) -> None:
+def test_grid_feed_mode_can_change_with_zero_feed_in_cap(coordinator) -> None:
     coordinator.data = {
         "grid_feed_mode": models.GridFeedMode.LIMITED,
         "feed_in_power_max": 0.0,
     }
     coordinator._async_write_register = AsyncMock()
 
-    with pytest.raises(
-        coordinator_module.HomeAssistantError,
-        match="while grid feed is disabled",
-    ):
-        asyncio.run(
-            coordinator.async_set_grid_feed_mode(models.GridFeedMode.UNLIMITED)
-        )
+    asyncio.run(
+        coordinator.async_set_grid_feed_mode(models.GridFeedMode.UNLIMITED)
+    )
 
-    coordinator._async_write_register.assert_not_awaited()
+    register = coordinator._registers_by_key["grid_feed_mode"]
+    coordinator._async_write_register.assert_awaited_once_with(register, 1)
+
+
+def test_grid_feed_register_write_publishes_enum_not_raw_integer(coordinator) -> None:
+    coordinator.data = {"grid_feed_mode": models.GridFeedMode.LIMITED}
+    coordinator.async_set_updated_data = Mock()
+    coordinator._modbus_client.async_write = AsyncMock()
+    coordinator._modbus_client.async_read = AsyncMock(return_value=[1])
+
+    register = coordinator._registers_by_key["grid_feed_mode"]
+    asyncio.run(coordinator._async_write_register(register, 1))
+
+    published = coordinator.async_set_updated_data.call_args[0][0]
+    assert published["grid_feed_mode"] == models.GridFeedMode.UNLIMITED
 
 
 def test_accepted_update_publishes_successful_coordinator_status(

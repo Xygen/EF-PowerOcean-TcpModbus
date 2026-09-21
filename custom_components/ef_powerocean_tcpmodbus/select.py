@@ -9,10 +9,10 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import BATTERY_MODE_SELECT, DOMAIN
+from .const import BATTERY_MODE_SELECT, DOMAIN, GRID_FEED_MODE_SELECT
 from .coordinator import EcoflowCoordinator
 from .entity import EcoFlowBaseEntity
-from .models import ControlEntityDef, ControlFeature
+from .models import ControlEntityDef, ControlFeature, GridFeedMode
 
 
 async def async_setup_entry(
@@ -24,7 +24,10 @@ async def async_setup_entry(
     coordinator: EcoflowCoordinator = hass.data[DOMAIN][entry.entry_id]
 
     async_add_entities(
-        [EcoFlowBatteryModeSelect(coordinator, entry, BATTERY_MODE_SELECT)]
+        [
+            EcoFlowBatteryModeSelect(coordinator, entry, BATTERY_MODE_SELECT),
+            EcoFlowGridFeedModeSelect(coordinator, entry, GRID_FEED_MODE_SELECT),
+        ]
     )
 
 
@@ -61,3 +64,27 @@ class EcoFlowBatteryModeSelect(EcoFlowBaseEntity, SelectEntity):
 
     async def async_select_option(self, option: str) -> None:
         await self.coordinator.control.async_select_feature(ControlFeature(option))
+
+
+class EcoFlowGridFeedModeSelect(EcoFlowBaseEntity, SelectEntity):
+    """Choose whether the inverter limits grid export by the configured power cap."""
+
+    def __init__(
+        self,
+        coordinator: EcoflowCoordinator,
+        entry: ConfigEntry,
+        definition: ControlEntityDef,
+    ) -> None:
+        super().__init__(coordinator, entry, definition)
+        self._attr_options = [str(mode) for mode in GridFeedMode]
+        self._attr_entity_category = definition.entity_category
+        if definition.icon:
+            self._attr_icon = definition.icon
+
+    @property
+    def current_option(self) -> str | None:
+        mode = (self.coordinator.data or {}).get("grid_feed_mode")
+        return str(mode) if mode is not None else None
+
+    async def async_select_option(self, option: str) -> None:
+        await self.coordinator.async_set_grid_feed_mode(GridFeedMode(option))

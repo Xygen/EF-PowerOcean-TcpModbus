@@ -355,6 +355,13 @@
           "unreachable_battery_full": "Batterie voll, Ziel nicht erreichbar",
           "unreachable_battery_empty": "Batterie leer, Ziel nicht erreichbar"
         }
+      },
+      "grid_feed_mode": {
+        "name": "Einspeisemodus",
+        "state": {
+          "limited": "Begrenzt",
+          "unlimited": "Unbegrenzt"
+        }
       }
     },
     "binary_sensor": {
@@ -414,6 +421,13 @@
           "charge_battery": "Batterie laden",
           "discharge_battery": "Batterie entladen",
           "export_to_grid": "Ins Netz einspeisen"
+        }
+      },
+      "grid_feed_mode_control": {
+        "name": "Einspeisemodus",
+        "state": {
+          "limited": "Begrenzt",
+          "unlimited": "Unbegrenzt"
         }
       }
     },

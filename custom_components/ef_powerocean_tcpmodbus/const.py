@@ -137,6 +137,7 @@ MODBUS_REGISTERS: Final[tuple[RegisterDef, ...]] = (
     RegisterDef("inverter_rated_power", 40528, RegisterType.UINT32),
     RegisterDef("system_modes", 40530, RegisterType.UINT32),
     RegisterDef("min_soc_limit", 40536, RegisterType.UINT16),
+    RegisterDef("grid_feed_mode", 40537, RegisterType.UINT16),
     RegisterDef(
         "feed_in_power_max",
         40609,

@@ -23,6 +23,7 @@ from .models import (
     ControlStatus,
     CoordinatorStatus,
     EnergySensorDef,
+    GridFeedMode,
     GridMode,
     InverterModel,
     NumberWritableDef,

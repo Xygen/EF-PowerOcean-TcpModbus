@@ -423,9 +423,6 @@
     "switch": {
       "battery_saver_mode_control": {
         "name": "Battery Saver Mode"
-      },
-      "grid_feed": {
-        "name": "Grid Feed-in"
       }
     }
   }

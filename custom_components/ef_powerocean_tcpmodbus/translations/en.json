@@ -352,6 +352,13 @@
           "unreachable_battery_full": "Battery full, target unreachable",
           "unreachable_battery_empty": "Battery empty, target unreachable"
         }
+      },
+      "grid_feed_mode": {
+        "name": "Grid Feed-in Mode",
+        "state": {
+          "limited": "Limited",
+          "unlimited": "Unlimited"
+        }
       }
     },
     "binary_sensor": {
@@ -404,11 +411,21 @@
           "discharge_battery": "Discharge battery",
           "export_to_grid": "Export to grid"
         }
+      },
+      "grid_feed_mode_control": {
+        "name": "Grid Feed-in Mode",
+        "state": {
+          "limited": "Limited",
+          "unlimited": "Unlimited"
+        }
       }
     },
     "switch": {
       "battery_saver_mode_control": {
         "name": "Battery Saver Mode"
+      },
+      "grid_feed": {
+        "name": "Grid Feed-in"
       }
     }
   }
